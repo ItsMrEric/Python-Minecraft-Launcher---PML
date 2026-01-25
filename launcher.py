@@ -112,10 +112,21 @@ if __name__ == "__main__":
                                 filtered_list.append(i)
                                 c += 1
                         id = input("Select version to install> ")
-                        ###############
+                        if id == "b":
+                            pass
+                        elif not id.isdigit():
+                            input("Unsupported input")
+                        elif int(id) > c or int(id) < 0:
+                            input("Unsupported input")
+                        else:
+                            c = 0
+                            for i in filtered_list:
+                                if int(id) == c:
+                                    version = i
+                                c += 1
 
 
-
+#unfinished do not touch
 
 
 
@@ -170,7 +181,7 @@ if __name__ == "__main__":
                             pass
                         elif not id.isdigit():
                             input("Unsupported input")
-                        elif int(id) > c:
+                        elif int(id) > c or int(id) < 0:
                             input("Unsupported input")
                         else:
                             c = 0
