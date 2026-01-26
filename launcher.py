@@ -8,6 +8,10 @@ import shutil
 import urllib.request
 from pathlib import Path
 import requests
+import ssl
+
+
+ssl._create_default_https_context = ssl._create_unverified_context
 
 BASE_DIR = Path("mc")
 VERSIONS_DIR = BASE_DIR / "versions"
@@ -29,6 +33,16 @@ DEFAULT_CONFIG = {
 MC_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest.json"
 JAVA_CMD = "java"
 MAX_RAM = "2G"
+
+def clear_folder_contents(folder: Path):
+    if not folder.exists():
+        return
+
+    for item in folder.iterdir():
+        if item.is_file() or item.is_symlink():
+            item.unlink()
+        elif item.is_dir():
+            shutil.rmtree(item)
 
 def load_or_fix_json(path, default_data):
     if path.exists():
@@ -124,9 +138,47 @@ if __name__ == "__main__":
                                 if int(id) == c:
                                     version = i
                                 c += 1
+                            json_url = version["url"]
+                            version_folder = Path(VERSIONS_DIR / version["id"])
+                            try:
+                                version_folder.mkdir()
+                            except FileExistsError:
+                                c = input("This version folder already exists! Do you want to erase it and reinstall? (Y/N)> ")
+                                if c == "Y":
+                                    clear_folder_contents(version_folder)
+                                    no_erase = False
+                                elif c == "N":
+                                    no_erase = True
+                                else:
+                                    input("Unrecognized input")
+                                    no_erase = True
+                            if not no_erase:
+                                json_path = Path(version_folder / f"{version["id"]}.json")
+                                try:
+                                    print("Downloading version.json file")
+                                    urllib.request.urlretrieve(json_url, json_path)
+                                    go_client = True
+                                    print("Done")
+                                except Exception as e:
+                                    input("Unable to download version.json file: " + str(e))
+                                    go_client = False
+                                if go_client:
+                                    with open(json_path) as json_file:
+                                        print("Downloading client.jar file")
+                                        json_data = json.load(json_file)
+                                        client_url = json_data["downloads"]["client"]["url"]
+                                        client_path = Path(version_folder / f"{version["id"]}.jar")
+                                        try:
+                                            urllib.request.urlretrieve(client_url, client_path)
+                                            go_assets = True
+                                            print("Done")
+                                        except Exception as e:
+                                            input("Unable to download client.jar file: " + str(e))
+                                            go_assets = False
+                                    if go_assets:
+                                        pass
 
-
-#unfinished do not touch
+                            
 
 
 
