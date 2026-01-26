@@ -139,21 +139,25 @@ if __name__ == "__main__":
                                     version = i
                                 c += 1
                             json_url = version["url"]
-                            version_folder = Path(VERSIONS_DIR / version["id"])
+                            version_id = version["id"]
+                            version_folder = Path(VERSIONS_DIR / version_id)
+                            print(f"Downloading {version_id} under \"{version_folder}\"!")
                             try:
                                 version_folder.mkdir()
+                                no_erase = False
                             except FileExistsError:
                                 c = input("This version folder already exists! Do you want to erase it and reinstall? (Y/N)> ")
-                                if c == "Y":
+                                if c.upper() == "Y":
                                     clear_folder_contents(version_folder)
                                     no_erase = False
-                                elif c == "N":
+                                elif c.upper() == "N":
                                     no_erase = True
                                 else:
                                     input("Unrecognized input")
                                     no_erase = True
                             if not no_erase:
-                                json_path = Path(version_folder / f"{version["id"]}.json")
+                                
+                                json_path = Path(version_folder / f"{version_id}.json")
                                 try:
                                     print("Downloading version.json file")
                                     urllib.request.urlretrieve(json_url, json_path)
@@ -167,24 +171,118 @@ if __name__ == "__main__":
                                         print("Downloading client.jar file")
                                         json_data = json.load(json_file)
                                         client_url = json_data["downloads"]["client"]["url"]
-                                        client_path = Path(version_folder / f"{version["id"]}.jar")
+                                        client_path = Path(version_folder / f"{version_id}.jar")
                                         try:
                                             urllib.request.urlretrieve(client_url, client_path)
-                                            go_assets = True
+                                            go_asset_index = True
                                             print("Done")
                                         except Exception as e:
                                             input("Unable to download client.jar file: " + str(e))
-                                            go_assets = False
-                                    if go_assets:
-                                        pass
-
-                            
-
-
-
-                        
+                                            go_asset_index = False
+                                    if go_asset_index:
+                                        with open(json_path) as json_file:
+                                            print("Downloading asset index")
+                                            json_data = json.load(json_file)
+                                            asset_index_url = json_data["assetIndex"]["url"]
+                                            asset_index_id = json_data["assetIndex"]["id"]
+                                            asset_index_path = Path(ASSETS_DIR / "indexes" / f"{asset_index_id}.json")
+                                            go = False
+                                            if asset_index_path.exists():
+                                                passed = False
+                                                while not passed:
+                                                    c = input("The asset index file already exists! Do you want to erase it (or skip: \"S\") and download it again? (Y/N/S)> ")
+                                                    if c.upper() == "Y":
+                                                        asset_index_path.unlink()
+                                                        go = True
+                                                        passed = True
+                                                    elif c.upper() == "N":
+                                                        go = False
+                                                        passed = True
+                                                    elif c.upper() == "S":
+                                                        go = True
+                                                        passed = True
+                                                    else:
+                                                        input("Unrecognized input")
+                                            else:
+                                                go = True
+                                            if go:
+                                                try:
+                                                    urllib.request.urlretrieve(asset_index_url, asset_index_path)
+                                                    go_assets = True
+                                                except Exception as e:
+                                                    input("Unable to download asset_index.json file: " + str(e))
+                                                    go_assets = False
+                                                    
+                                        if go_assets:
+                                            with open(asset_index_path) as asset_index_file:
+                                                print("Downloading assets (this is going to be slow though =D)")
+                                                assets_index_data = json.load(asset_index_file)
+                                                go_libraries = True
+                                                for asset_name, asset_data in assets_index_data["objects"].items():
+                                                    print("Total files: {}")
+                                                    asset_hash = asset_data["hash"]
+                                                    sub_dir = asset_hash[:2]
+                                                    out_dir = OBJECTS_DIR / sub_dir
+                                                    out_dir.mkdir(parents=True, exist_ok=True)
+                                                    out_file = out_dir / asset_hash
+                                                    url = f"https://resources.download.minecraft.net/{sub_dir}/{asset_hash}"
+                                                    if out_file.exists():
+                                                        continue
+                                                    if asset_name == "READ_ME_I_AM_VERY_IMPORTANT":
+                                                        print(f"Downloading: {asset_name} (LOL what kind of file is this)")
+                                                    else:
+                                                        print(f"Downloading: {asset_name}")
+                                                    try:
+                                                        urllib.request.urlretrieve(url, out_file)
+                                                        
+                                                    except Exception as e:
+                                                        input(f"Unable to download (asset) {asset_name}: {str(e)}")
+                                                        go_libraries = False
+                                                        break
+                                                if go_libraries:
+                                                    print("Done")
+                                                    print("Checking & downloading libraries")
+                                                    version_download_done = True
+                                                    for library_data in json_data["libraries"]:
+                                                        library_path = Path(library_data["downloads"]["artifact"]["path"])
+                                                        if library_path.exists():
+                                                            print(f"Library: {str(library_path)} already exists, skipping......")
+                                                        else:
+                                                            print(f"Downloading library: {str(library_path)}")
+                                                            library_url = library_data["downloads"]["artifact"]["url"]
+                                                            try:
+                                                                urllib.request.urlretrieve(library_url, library_path)
+                                                            except Exception as e:
+                                                                input(f"Unable to download (library) {library_path}: {str(e)}")
+                                                                version_download_done = False
+                                                                break
+                                                    if version_download_done:
+                                                        input(f"Successfully downloaded version {version_id}!")
                 elif c == "2":
-                    pass#delete
+                    folders = [f for f in VERSIONS_DIR.iterdir() if f.is_dir()]
+                    print("Current version list (installed):")
+                    c = 0
+                    for i in folders:
+                        print(f"{str(c)}: {i.name} ({str(i)})")
+                        c += 1
+
+
+                        #################################################################
+                    if c == 0:
+                        input("There are no accounts yet")
+                    else:
+                        id = input("Select account to delete> ")
+                        
+                        if id == "b":
+                            pass
+                        elif not id.isdigit():
+                            input("Unsupported input")
+                        elif int(id) > c or int(id) < 0:
+                            input("Unsupported input")
+                        else:
+
+                            ####################################################################
+
                 elif c == "3":
                     pass#select
                 elif c == "4":
@@ -204,16 +302,16 @@ if __name__ == "__main__":
                 if c == "1":
                     account_name = input("Enter account name> ")
                     if not account_name == "b":
-
                         account = {"username": account_name, "online": False, "uuid": str(uuid.uuid5(uuid.NAMESPACE_DNS, account_name))}
                         for i in configs["accounts"]:
                             if i == account:
                                 input("This account has already been added!")
-                            else:
-                                configs["accounts"].append(account)
-                                with open(LAUNCHER_CONFIG_PATH, "w") as f:
-                                    json.dump(configs, f, indent = 4)
-                                input("Success!")
+                                break
+                        else:
+                            configs["accounts"].append(account)
+                            with open(LAUNCHER_CONFIG_PATH, "w") as f:
+                                json.dump(configs, f, indent = 4)
+                            input("Success!")
                 elif c == "2":
                     print("Current account list:")
                     c = 0
