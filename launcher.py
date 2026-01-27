@@ -9,6 +9,10 @@ import urllib.request
 from pathlib import Path
 import requests
 import ssl
+import tarfile
+import zipfile
+import platform
+import re
 
 
 ssl._create_default_https_context = ssl._create_unverified_context
@@ -20,6 +24,14 @@ ASSETS_DIR = BASE_DIR / "assets"
 INDEXES_DIR = ASSETS_DIR / "indexes"
 OBJECTS_DIR = ASSETS_DIR / "objects"
 
+JAVA_DOWNLOAD_URLS = {
+    "Windows": "https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jre/hotspot/normal/eclipse",
+    "Linux": "https://api.adoptium.net/v3/binary/latest/17/ga/linux/x64/jre/hotspot/normal/eclipse",
+    "Darwin": "https://api.adoptium.net/v3/binary/latest/17/ga/mac/x64/jre/hotspot/normal/eclipse",
+}
+
+
+
 LAUNCHER_CONFIG_PATH = Path(BASE_DIR / "launcher_config.json")
 DEFAULT_CONFIG = {
     "manifest_url": "https://piston-meta.mojang.com/mc/game/version_manifest.json",
@@ -27,12 +39,101 @@ DEFAULT_CONFIG = {
     "max_ram": "4G",
     "accounts": [],
     "current_account": {"username": None, "online": None, "uuid": None},
-    "version_display": {"old_alpha": True, "old_beta": True, "snapshot": True, "release": True}
+    "version_display": {"old_alpha": True, "old_beta": True, "snapshot": True, "release": True},
+    "selected_version": {
+        "path": None,
+        "id": None,
+        "json_path": None
+    }
 }
 
-MC_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest.json"
+
 JAVA_CMD = "java"
 MAX_RAM = "2G"
+
+
+def build_launch_command(version_json: dict, config: dict) -> list[str]:
+    """
+    Build the full Java launch command from a Minecraft version JSON
+    and a config/context dict.
+    """
+
+    VAR = re.compile(r"\$\{([^}]+)\}")
+
+    def expand(value: str) -> str:
+        return VAR.sub(lambda m: str(config.get(m.group(1), "")), value)
+
+    def rule_allows(rule: dict) -> bool:
+        # OS checks
+        os_rule = rule.get("os")
+        if os_rule:
+            if "name" in os_rule:
+                sysname = platform.system()
+                if os_rule["name"] == "osx" and sysname != "Darwin":
+                    return False
+                if os_rule["name"] == "windows" and sysname != "Windows":
+                    return False
+                if os_rule["name"] == "linux" and sysname != "Linux":
+                    return False
+
+            if "arch" in os_rule:
+                if os_rule["arch"] not in platform.machine().lower():
+                    return False
+                
+                
+
+        # Feature checks
+        for key, val in rule.get("features", {}).items():
+            if config.get(key) != val:
+                return False
+
+        return True
+
+    def rules_pass(entry: dict) -> bool:
+        if "rules" not in entry:
+            return True
+        return any(
+            rule_allows(rule)
+            for rule in entry["rules"]
+            if rule.get("action") == "allow"
+        )
+
+    def build_arg_list(entries: list) -> list[str]:
+        args = []
+        for entry in entries:
+            if isinstance(entry, str):
+                args.append(expand(entry))
+
+            elif isinstance(entry, dict):
+                if not rules_pass(entry):
+                    continue
+
+                value = entry["value"]
+                if isinstance(value, list):
+                    args.extend(expand(v) for v in value)
+                else:
+                    args.append(expand(value))
+
+        return args
+
+    # ---- JVM + GAME ARGS ----
+    jvm_args = build_arg_list(version_json["arguments"]["jvm"])
+    game_args = build_arg_list(version_json["arguments"]["game"])
+
+    # ---- FINAL COMMAND ----
+    return [
+        config["java_path"],
+        *jvm_args,
+        version_json["mainClass"],
+        *game_args,
+    ]
+
+def pick_java(min_java):
+    if min_java >= 21:
+        return "java21"
+    if min_java >= 17:
+        return "java17"
+    return "java8"
 
 def clear_folder_contents(folder: Path):
     if not folder.exists():
@@ -72,6 +173,8 @@ def fetch_minecraft_versions():
     return manifest
 
 if __name__ == "__main__":
+    print()
+    print()
     print("Welcome to PML -- Python Minecraft Launcher by ItsMrEric")
     print("You can input stuff when you see \">\". The text behind it shows the current page")
     print("Input \"b\" to return (go back)")
@@ -79,6 +182,8 @@ if __name__ == "__main__":
     ensure_dirs()
     print("Reading configs......" )
     configs = load_or_fix_json(LAUNCHER_CONFIG_PATH, DEFAULT_CONFIG)
+    MC_MANIFEST_URL = "https://piston-meta.mojang.com/mc/game/version_manifest.json"
+    print()
     running = True
     while running:
         print("1: Versions")
@@ -265,13 +370,10 @@ if __name__ == "__main__":
                     for i in folders:
                         print(f"{str(c)}: {i.name} ({str(i)})")
                         c += 1
-
-
-                        #################################################################
                     if c == 0:
-                        input("There are no accounts yet")
+                        input("There are no versions downloaded yet")
                     else:
-                        id = input("Select account to delete> ")
+                        id = input("Select version to delete> ")
                         
                         if id == "b":
                             pass
@@ -280,13 +382,64 @@ if __name__ == "__main__":
                         elif int(id) > c or int(id) < 0:
                             input("Unsupported input")
                         else:
+                            version_name = Path(folders[int(id)]).name
+                            version_path = (folders[int(id)])
+                            try:
+                                folder = version_path
 
-                            ####################################################################
+
+                                for item in os.listdir(folder):
+                                    path = os.path.join(folder, item)
+                                    if os.path.isfile(path):
+                                        os.remove(path)
+                                    else:
+                                        shutil.rmtree(path)
+                                if folder.exists():
+                                    shutil.rmtree(folder)
+                                input(f"Seccessfully deleted {version_name}!")
+                            except Exception as e:
+                                input(f"Unable to delete version {version_name}! {str(e)}")
+
 
                 elif c == "3":
-                    pass#select
+                    folders = [f for f in VERSIONS_DIR.iterdir() if f.is_dir()]
+                    print("Current version list (installed):")
+                    c = 0
+                    for i in folders:
+                        print(f"{str(c)}: {i.name} ({str(i)})")
+                        c += 1
+                    if c == 0:
+                        input("There are no versions downloaded yet")
+                    else:
+                        id = input("Select version> ")
+                        
+                        if id == "b":
+                            pass
+                        elif not id.isdigit():
+                            input("Unsupported input")
+                        elif int(id) > c or int(id) < 0:
+                            input("Unsupported input")
+                        else:
+                            try:
+                                version_name = Path(folders[int(id)]).name
+                                version_path = (folders[int(id)])
+                                configs["selected_version"]["path"] = str(version_path)
+                                configs["selected_version"]["id"] = str(version_id)
+                                configs["selected_version"]["json_path"] = 
+                                with open(LAUNCHER_CONFIG_PATH, "w") as f:
+                                    json.dump(configs, f, indent = 4)
+                                input("Success!")
+                            except Exception as e:
+                                print(f"Unable to save version: {str(e)}")
                 elif c == "4":
-                    pass#list
+                    folders = [f for f in VERSIONS_DIR.iterdir() if f.is_dir()]
+                    print("Current version list (installed):")
+                    c = 0
+                    for i in folders:
+                        print(f"{str(c)}: {i.name} ({str(i)})")
+                        c += 1
+                    if c == 0:
+                        input("There are no versions downloaded yet")
                 elif c == "b":
                     versions_running = False
                 else:
@@ -400,6 +553,12 @@ if __name__ == "__main__":
         elif c == "3":
             pass#settings
         elif c == "4":
-            pass#launch
+            if (configs["current_account"]["username"]) and configs["selected_version_path"]:
+                print(f"Launching version {configs["selected_version_path"]} with username {configs["current_account"]["username"]}")
+                version_path = configs["selected_version_path"]
+                account = configs["current_account"]
+                json_path = Path(version_path / "")
+            else:
+                input("Unable to launch, either no account selected or no version selected.")
         else:
             input("unrecognized input")
