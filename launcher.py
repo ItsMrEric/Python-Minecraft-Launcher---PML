@@ -38,7 +38,7 @@ DEFAULT_CONFIG = {
     "java_cmd": "java",
     "max_ram": "4G",
     "accounts": [],
-    "current_account": {"username": None, "online": None, "uuid": None},
+    "selected_account": {"username": None, "online": None, "uuid": None},
     "version_display": {"old_alpha": True, "old_beta": True, "snapshot": True, "release": True},
     "selected_version": {
         "path": None,
@@ -319,12 +319,13 @@ if __name__ == "__main__":
                                                     go_assets = False
                                                     
                                         if go_assets:
+                                            n = 0
                                             with open(asset_index_path) as asset_index_file:
                                                 print("Downloading assets (this is going to be slow though =D)")
                                                 assets_index_data = json.load(asset_index_file)
                                                 go_libraries = True
                                                 for asset_name, asset_data in assets_index_data["objects"].items():
-                                                    print("Total files: {}")
+                                                    print(f"Total files: {len(assets_index_data["objects"])}, currently downloaded: {str(n)} ({str(int(n / len(assets_index_data["objects"]) * 100))}%)")
                                                     asset_hash = asset_data["hash"]
                                                     sub_dir = asset_hash[:2]
                                                     out_dir = OBJECTS_DIR / sub_dir
@@ -339,7 +340,7 @@ if __name__ == "__main__":
                                                         print(f"Downloading: {asset_name}")
                                                     try:
                                                         urllib.request.urlretrieve(url, out_file)
-                                                        
+                                                        n += 1
                                                     except Exception as e:
                                                         input(f"Unable to download (asset) {asset_name}: {str(e)}")
                                                         go_libraries = False
@@ -349,14 +350,18 @@ if __name__ == "__main__":
                                                     print("Checking & downloading libraries")
                                                     version_download_done = True
                                                     for library_data in json_data["libraries"]:
-                                                        library_path = Path(library_data["downloads"]["artifact"]["path"])
+                                                        try:
+                                                            library_path = Path(LIBRARIES_DIR / library_data["downloads"]["artifact"]["path"])
+                                                        except Exception as e:
+                                                            continue
                                                         if library_path.exists():
                                                             print(f"Library: {str(library_path)} already exists, skipping......")
                                                         else:
+                                                            library_path.parent.mkdir(parents = True, exist_ok = True)
                                                             print(f"Downloading library: {str(library_path)}")
                                                             library_url = library_data["downloads"]["artifact"]["url"]
                                                             try:
-                                                                urllib.request.urlretrieve(library_url, library_path)
+                                                                urllib.request.urlretrieve(library_url, str(library_path))
                                                             except Exception as e:
                                                                 input(f"Unable to download (library) {library_path}: {str(e)}")
                                                                 version_download_done = False
@@ -423,9 +428,10 @@ if __name__ == "__main__":
                             try:
                                 version_name = Path(folders[int(id)]).name
                                 version_path = (folders[int(id)])
+                                json_path = Path(version_path / f"{version_name}.json")
                                 configs["selected_version"]["path"] = str(version_path)
-                                configs["selected_version"]["id"] = str(version_id)
-                                configs["selected_version"]["json_path"] = 
+                                configs["selected_version"]["id"] = str(version_name)
+                                configs["selected_version"]["json_path"] = str(json_path)
                                 with open(LAUNCHER_CONFIG_PATH, "w") as f:
                                     json.dump(configs, f, indent = 4)
                                 input("Success!")
@@ -496,8 +502,8 @@ if __name__ == "__main__":
                                 c += 1
                             configs["accounts"].pop(int(id))
                             
-                            if (not configs["current_account"] == {}) and configs["current_account"]["username"] == username and configs["current_account"]["uuid"] == this_uuid and configs["current_account"]["online"] == online:
-                                configs["current_account"] = {}
+                            if (not configs["selected_account"] == {}) and configs["selected_account"]["username"] == username and configs["selected_account"]["uuid"] == this_uuid and configs["selected_account"]["online"] == online:
+                                configs["selected_account"] = {}
                             with open(LAUNCHER_CONFIG_PATH, "w") as f:
                                 json.dump(configs, f, indent = 4)
                             input("Success!")
@@ -527,7 +533,7 @@ if __name__ == "__main__":
                                 if int(id) == c:
                                     account = {"username": i["username"], "online": i["online"], "uuid": i["uuid"]}
                                 c += 1
-                            configs["current_account"] = account
+                            configs["selected_account"] = account
                             with open(LAUNCHER_CONFIG_PATH, "w") as f:
                                 json.dump(configs, f, indent = 4)
                             input("Success!")
@@ -553,11 +559,16 @@ if __name__ == "__main__":
         elif c == "3":
             pass#settings
         elif c == "4":
-            if (configs["current_account"]["username"]) and configs["selected_version_path"]:
-                print(f"Launching version {configs["selected_version_path"]} with username {configs["current_account"]["username"]}")
-                version_path = configs["selected_version_path"]
-                account = configs["current_account"]
-                json_path = Path(version_path / "")
+            if (configs["selected_account"]["username"]) and (configs["selected_account"]["uuid"]) and (configs["selected_account"]["online"]) and (configs["selected_version"]["id"]) and (configs["selected_version"]["path"]) and (configs["selected_version"]["json_path"]):
+                print(f"Launching version {configs["selected_version"]["id"]} with username {configs["selected_account"]["username"]}")
+                version_path = configs["selected_version"]["path"]
+                account = configs["selected_account"]
+                json_path = configs["selected_version"]["json_path"]
+                with open(json_path) as json_file:
+                    json_data = json.load(json_file)
+                    main_class = json_data["mainClass"]
+                    min_java = json_data["minimumLauncherVersion"]
+                    
             else:
                 input("Unable to launch, either no account selected or no version selected.")
         else:
