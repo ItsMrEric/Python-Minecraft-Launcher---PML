@@ -11,8 +11,9 @@ import requests
 import ssl
 import tarfile
 import zipfile
-import platform
 import re
+import sys
+
 
 
 ssl._create_default_https_context = ssl._create_unverified_context
@@ -23,15 +24,11 @@ LIBRARIES_DIR = BASE_DIR / "libraries"
 ASSETS_DIR = BASE_DIR / "assets"
 INDEXES_DIR = ASSETS_DIR / "indexes"
 OBJECTS_DIR = ASSETS_DIR / "objects"
-
 JAVA_DOWNLOAD_URLS = {
     "Windows": "https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jre/hotspot/normal/eclipse",
     "Linux": "https://api.adoptium.net/v3/binary/latest/17/ga/linux/x64/jre/hotspot/normal/eclipse",
     "Darwin": "https://api.adoptium.net/v3/binary/latest/17/ga/mac/x64/jre/hotspot/normal/eclipse",
 }
-
-
-
 LAUNCHER_CONFIG_PATH = Path(BASE_DIR / "launcher_config.json")
 DEFAULT_CONFIG = {
     "manifest_url": "https://piston-meta.mojang.com/mc/game/version_manifest.json",
@@ -46,11 +43,109 @@ DEFAULT_CONFIG = {
         "json_path": None
     }
 }
-
-
 JAVA_CMD = "java"
 MAX_RAM = "2G"
+# ---------------- CONFIG ----------------
+JAVA_BASE_DIR = Path("java")
+JAVA_DIR = BASE_DIR / "runtime"
+# Java 17 (LTS) download URLs from Adoptium
+JAVA_DOWNLOAD_URLS = {
+    "Windows": "https://api.adoptium.net/v3/binary/latest/17/ga/windows/x64/jre/hotspot/normal/eclipse",
+    "Linux":   "https://api.adoptium.net/v3/binary/latest/17/ga/linux/x64/jre/hotspot/normal/eclipse",
+    "Darwin":  "https://api.adoptium.net/v3/binary/latest/17/ga/mac/x64/jre/hotspot/normal/eclipse",
+}
+# ----------------------------------------
 
+def get_java_download_url(version, platform):
+    urls = {
+        "windows": f"https://api.adoptium.net/v3/binary/latest/{version}/ga/windows/x64/jre/hotspot/normal/eclipse",
+        "linux":   f"https://api.adoptium.net/v3/binary/latest/{version}/ga/linux/x64/jre/hotspot/normal/eclipse",
+        "mac":  f"https://api.adoptium.net/v3/binary/latest/{version}/ga/mac/x64/jre/hotspot/normal/eclipse",
+    }
+    return urls[platform]
+
+def download_java(url, out_file):
+    print("Downloading Java")
+    urllib.request.urlretrieve(url, out_file)
+    print("Download complete")
+
+def find_local_java(required_major: int, java_root: str = "java"):
+    """
+    Checks if a specific Java major version exists under the java folder.
+    Returns the java executable path if found, otherwise False.
+    """
+    java_root = Path(java_root)
+    java_dir = java_root / f"java{required_major}"
+    if sys.platform.startswith("win"):
+        java_exe = java_dir / "bin" / "java.exe"
+    else:
+        java_exe = java_dir / "bin" / "java"
+    if java_exe.exists():
+        return str(java_exe)
+    return False
+
+def extract_java(archive_path, target_dir):
+    print("Extracting Java...")
+    target_dir.mkdir(parents=True, exist_ok=True)
+
+    if archive_path.suffix == ".zip":
+        with zipfile.ZipFile(archive_path, "r") as z:
+            z.extractall(target_dir)
+    else:
+        with tarfile.open(archive_path, "r:*") as t:
+            t.extractall(target_dir)
+
+    print("Extraction complete.")
+
+def find_java_executable():
+    for root, dirs, files in os.walk(JAVA_DIR):
+        if platform.system() == "Windows" and "java.exe" in files:
+            return Path(root) / "java.exe"
+        if platform.system() != "Windows" and "java" in files:
+            return Path(root) / "java"
+    return None
+
+def main():
+    system = platform.system()
+
+    if system not in JAVA_DOWNLOAD_URLS:
+        raise RuntimeError(f"Unsupported OS: {system}")
+
+    JAVA_BASE_DIR.mkdir(exist_ok=True)
+
+    archive_name = "java.zip" if system == "Windows" else "java.tar.gz"
+    archive_path = JAVA_BASE_DIR / archive_name
+
+    if not JAVA_DIR.exists():
+        download_java(JAVA_DOWNLOAD_URLS[system], archive_path)
+        extract_java(archive_path, JAVA_DIR)
+
+    java_bin = find_java_executable()
+    if not java_bin:
+        raise RuntimeError("Java executable not found.")
+
+    print("\nRunning local Java:")
+    subprocess.run([str(java_bin), "-version"])
+
+def get_java_major(java_path="java"):
+    proc = subprocess.run(
+        [java_path, "-version"],
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+
+    # Java prints version info to stderr
+    text = proc.stderr.decode("utf-8", errors="ignore")
+
+    # Debug (keep this for now)
+    print(text)
+
+    # Match: version "21.0.4"
+    match = re.search(r'version\s+"(\d+)', text)
+    if match:
+        return int(match.group(1))
+
+    return None
 
 def build_launch_command(version_json: dict, config: dict) -> list[str]:
     """
@@ -128,13 +223,6 @@ def build_launch_command(version_json: dict, config: dict) -> list[str]:
         *game_args,
     ]
 
-def pick_java(min_java):
-    if min_java >= 21:
-        return "java21"
-    if min_java >= 17:
-        return "java17"
-    return "java8"
-
 def clear_folder_contents(folder: Path):
     if not folder.exists():
         return
@@ -164,6 +252,7 @@ def load_or_fix_json(path, default_data):
 def ensure_dirs():
     for d in [BASE_DIR, VERSIONS_DIR, LIBRARIES_DIR, ASSETS_DIR, INDEXES_DIR, OBJECTS_DIR]:
         d.mkdir(parents=True, exist_ok=True)
+
 def fetch_minecraft_versions():
     try:
         resp = requests.get(MC_MANIFEST_URL)
@@ -559,7 +648,7 @@ if __name__ == "__main__":
         elif c == "3":
             pass#settings
         elif c == "4":
-            if (configs["selected_account"]["username"]) and (configs["selected_account"]["uuid"]) and (configs["selected_account"]["online"]) and (configs["selected_version"]["id"]) and (configs["selected_version"]["path"]) and (configs["selected_version"]["json_path"]):
+            if (configs["selected_account"]["username"]) and (configs["selected_account"]["uuid"]) and (configs["selected_account"]["online"] != None) and (configs["selected_version"]["id"]) and (configs["selected_version"]["path"]) and (configs["selected_version"]["json_path"]):
                 print(f"Launching version {configs["selected_version"]["id"]} with username {configs["selected_account"]["username"]}")
                 version_path = configs["selected_version"]["path"]
                 account = configs["selected_account"]
@@ -567,8 +656,88 @@ if __name__ == "__main__":
                 with open(json_path) as json_file:
                     json_data = json.load(json_file)
                     main_class = json_data["mainClass"]
-                    min_java = json_data["minimumLauncherVersion"]
-                    
+                    min_java = json_data["javaVersion"]["majorVersion"]
+                    current_version = get_java_major()
+                    print(current_version)
+                    if int(current_version) != int(min_java):
+                        local_java = find_local_java(int(min_java), JAVA_BASE_DIR)
+                        if local_java:
+                            pass
+                            #####run local_java
+                        else:
+                            go = False
+                            if sys.platform.startswith("win"):
+                                computer_platform = "windows"
+                                go = True
+                            elif sys.platform == "darwin":
+                                computer_platform = "mac"
+                                go = True
+                            elif sys.platform.startswith("linux"):
+                                computer_platform = "linux"
+                                go = True
+                            else:
+                                computer_platform = "unknown"
+                                input("Platform not supported")
+                                go = False
+                            if go:
+                                print(f"Downloading Java version {min_java}")
+                                download_dir = JAVA_BASE_DIR
+                                archive_name = "java.zip" if computer_platform == "windows" else "java.tar.gz"
+                                archive_path = download_dir / archive_name
+                                target_dir = JAVA_BASE_DIR / "runtime"
+                                try:
+                                    urllib.request.urlretrieve(url, archive_path)
+                                    print("Download complete")
+                                    print(f"Extracting java in {archive_path}")
+                                    try:
+                                        target_dir.mkdir(parents=True, exist_ok=True)
+
+                                        if archive_path.suffix == ".zip":
+                                            with zipfile.ZipFile(archive_path, "r") as z:
+                                                z.extractall(target_dir)
+                                        else:
+                                            with tarfile.open(archive_path, "r:*") as t:
+                                                t.extractall(target_dir)
+                                        input(f"Successfully installed java version {min_java} in {target_dir}")
+                                        print(f"Launching Minecraft version {configs["selected_version"]["id"]} with local java version {min_java} in {target_dir}. YOU CAN CONFIGURE FEATURES IN SETTINGS!!")
+                                        local_java_installed = find_local_java(int(min_java), JAVA_BASE_DIR)
+                                        if not local_java_installed:
+                                            input("Unable to find java")
+                                        else:
+                                            try:
+                                                arguments = json_data["arguments"]
+                                            except Exception:
+                                                arguments = json_data["minecraftArguments"]["game"]
+                                            main_class = json_data["mainClass"]
+                                        
+                                            variables = {
+                                                "auth_player_name": configs["selected_account"]["username"],
+                                                "auth_uuid": configs["selected_account"]["uuid"],
+                                                "auth_access_token": 0, #
+                                                "version_name": json_data["id"],
+                                                "version_type": json_data["type"],
+                                                "game_directory": BASE_DIR,
+                                                "assets_root": ASSETS_DIR,
+                                                "assets_index_name": json_data.get("assetIndex", {}).get("id", ""),
+                                                "classpath": build_classpath(version_json), # we can auto-generate from libraries
+                                                "launcher_name": "MyLauncher",
+                                                "launcher_version": "1.0",
+                                                # optional features
+                                                "resolution_width": configs["features"]["resolution_width"],
+                                                "resolution_height": configs["features"]["resolution_height"],
+                                                "quickPlayPath": configs["features"]["quick_play_path"],
+                                                "quickPlaySingleplayer": configs["features"]["quick_play_singleplayer"],
+                                                "quickPlayMultiplayer": configs["features"]["quick_play_multiplayer"],
+                                                "quickPlayRealms": configs["features"]["quick_play_realms"],
+                                                }
+
+                                    except Exception as e:
+                                        input(f"Unable to extract java from {archive_path}: {str(e)}")
+                                except Exception as e:
+                                    input(f"Unable to download java version {min_java}: {str(e)}")
+                    else:
+                        pass#run java
+
             else:
                 input("Unable to launch, either no account selected or no version selected.")
         else:
