@@ -56,6 +56,26 @@ JAVA_DOWNLOAD_URLS = {
 }
 # ----------------------------------------
 
+def find_all_semantic_major_versions(root_folder: str, platform: str) -> list[int]:
+    root = Path(root_folder)
+    pattern = re.compile(r'SEMANTIC_VERSION="(\d+)\.\d+\.\d+\+\d+"')
+    versions = []
+    for subfolder in root.iterdir():
+        if not subfolder.is_dir():
+            continue
+        release_file = subfolder / "release"
+        if not release_file.exists():
+            continue
+        try:
+            content = release_file.read_text(encoding="utf-8")
+            match = pattern.search(content)
+            if match:
+                java_executable = "java.exe" if platform == "windows" else "java"
+                versions.append({"id": int(match.group(1)), "executable": str(subfolder / "bin" / java_executable)})
+        except Exception as e:
+            print(f"Error reading {release_file}: {e}")
+    return versions
+
 def get_os_name():
     p = platform.system().lower()
     if "windows" in p:
@@ -718,122 +738,126 @@ if __name__ == "__main__":
                 account = configs["selected_account"]
                 json_path = configs["selected_version"]["json_path"]
                 with open(json_path) as json_file:
-                    json_data = json.load(json_file)
-                    main_class = json_data["mainClass"]
-                    min_java = json_data["javaVersion"]["majorVersion"]
-                    current_version = get_java_major()
-                    print(current_version)
-                    if int(current_version) != int(min_java):
-                        local_java = find_local_java(int(min_java), JAVA_BASE_DIR / "runtime")
-                        if local_java:
-                            pass
-                            #####run local_java
+                    go = False
+                    if platform.system().lower().startswith("win"):
+                        computer_platform = "windows"
+                        go = True
+                    elif platform.system().lower() == "darwin":
+                        computer_platform = "mac"
+                        go = True
+                    elif platform.system().lower().startswith("linux"):
+                        computer_platform = "linux"
+                        go = True
+                    if go:
+                        json_data = json.load(json_file)
+                        main_class = json_data["mainClass"]
+                        min_java = json_data["javaVersion"]["majorVersion"]
+                        current_version = get_java_major()
+                        installed_java_versions = find_all_semantic_major_versions(JAVA_BASE_DIR / "runtime", computer_platform)
+                        installed_java_versions.append({"id": int(current_version), "executable": "java"})
+                        if not any(j["id"] == min_java for j in installed_java_versions):
+                            print(f"Downloading Java version {min_java}")
+                            download_dir = JAVA_BASE_DIR
+                            archive_name = "java.zip" if computer_platform == "windows" else "java.tar.gz"
+                            archive_path = download_dir / archive_name
+                            archive_path.parent.mkdir(exist_ok = True)
+                            target_dir = JAVA_BASE_DIR / "runtime"
+                            url = get_java_download_url(min_java, computer_platform)
+                            if True:
+                                req = urllib.request.Request(
+                                    url,
+                                    headers={
+                                        "User-Agent": "Python Minecraft Launcher/1.0",
+                                        "Accept": "*/*"
+                                    }
+                                )
+                                with urllib.request.urlopen(req) as r:
+                                    with open(archive_path, "wb") as f:
+                                        f.write(r.read())
+                                print("Download complete")
+                                print(f"Extracting java in {archive_path}")
+                                if True:
+                                    target_dir.mkdir(parents=True, exist_ok=True)
+
+                                    if archive_path.suffix == ".zip":
+                                        with zipfile.ZipFile(archive_path, "r") as z:
+                                            z.extractall(target_dir)
+                                    else:
+                                        with tarfile.open(archive_path, "r:*") as t:
+                                            t.extractall(target_dir)
+                                    input(f"Successfully installed java version {min_java} in {target_dir}")
+                                    print(f"Launching Minecraft version {configs["selected_version"]["id"]} with local java version {min_java} in {target_dir}. YOU CAN CONFIGURE FEATURES IN SETTINGS!!")
+                                    local_java_installed = str(archive_path.parent)
+                                    if not local_java_installed:
+                                        input("Unable to find java")
+                                    else:
+                                        try:
+                                            arguments = json_data["arguments"]
+                                        except Exception:
+                                            arguments = json_data["minecraftArguments"]["game"]
+                                        main_class = json_data["mainClass"]
+                                        classpath_entries = []
+
+                                        for lib in json_data["libraries"]:
+                                            # Skip natives (they go elsewhere)
+                                            if "natives" in lib:
+                                                continue
+
+                                            artifact = lib.get("downloads", {}).get("artifact")
+                                            if not artifact:
+                                                continue
+
+                                            lib_path = Path(LIBRARIES_DIR) / artifact["path"]
+                                            classpath_entries.append(str(lib_path))
+
+                                        # Add the main Minecraft jar LAST
+                                        classpath_entries.append(str(configs["selected_version"]["path"]))
+                                        class_path = os.pathsep.join(classpath_entries)
+                                        variables = {
+                                            "auth_player_name": configs["selected_account"]["username"],
+                                            "auth_uuid": configs["selected_account"]["uuid"],
+                                            "auth_access_token": 0, #
+                                            "version_name": json_data["id"],
+                                            "version_type": json_data["type"],
+                                            "game_directory": BASE_DIR,
+                                            "assets_root": ASSETS_DIR,
+                                            "assets_index_name": json_data.get("assetIndex", {}).get("id", ""),
+                                            "classpath": class_path, # we can auto-generate from libraries
+                                            "launcher_name": "Python Minecraft Launcher",
+                                            "launcher_version": "1.0",
+                                            # optional features
+                                            "resolution_width": configs["features"]["resolution_width"],
+                                            "resolution_height": configs["features"]["resolution_height"],
+                                            "quickPlayPath": configs["features"]["quick_play_path"],
+                                            "quickPlaySingleplayer": configs["features"]["quick_play_singleplayer"],
+                                            "quickPlayMultiplayer": configs["features"]["quick_play_multiplayer"],
+                                            "quickPlayRealms": configs["features"]["quick_play_realms"],
+                                            }
+                                        launch_cmd = build_launch_command(
+                                            java_cmd=False,
+                                            json_data=json_data,
+                                            variables=variables,
+                                            features=configs["features"],
+                                        )
+
+
+                                else:
+                                    input(f"Unable to extract java from {archive_path}: {str(e)}")
+                            else:
+                                input(f"Unable to download java version {min_java}: {str(e)}")
                         else:
                             go = False
-                            if sys.platform.startswith("win"):
-                                computer_platform = "windows"
+                            java_path = next((j["executable"] for j in installed_java_versions if j["id"] == min_java), None)
+                            if str(java_path).endswith("java.exe"):
+                                if Path(java_path).exists:
+                                    go = True
+                            if java_path == "java":
                                 go = True
-                            elif sys.platform == "darwin":
-                                computer_platform = "mac"
-                                go = True
-                            elif sys.platform.startswith("linux"):
-                                computer_platform = "linux"
-                                go = True
-                            else:
-                                computer_platform = "unknown"
-                                input("Platform not supported")
-                                go = False
                             if go:
-                                print(f"Downloading Java version {min_java}")
-                                download_dir = JAVA_BASE_DIR
-                                archive_name = "java.zip" if computer_platform == "windows" else "java.tar.gz"
-                                archive_path = download_dir / archive_name
-                                archive_path.parent.mkdir(exist_ok = True)
-                                target_dir = JAVA_BASE_DIR / "runtime"
-                                url = get_java_download_url(min_java, computer_platform)
-                                try:
-                                    req = urllib.request.Request(
-                                        url,
-                                        headers={
-                                            "User-Agent": "Python Minecraft Launcher/1.0",
-                                            "Accept": "*/*"
-                                        }
-                                    )
-                                    with urllib.request.urlopen(req) as r:
-                                        with open(archive_path, "wb") as f:
-                                            f.write(r.read())
-                                    print("Download complete")
-                                    print(f"Extracting java in {archive_path}")
-                                    try:
-                                        target_dir.mkdir(parents=True, exist_ok=True)
+                                pass
+                            else:
+                                input("Platform not supported")
 
-                                        if archive_path.suffix == ".zip":
-                                            with zipfile.ZipFile(archive_path, "r") as z:
-                                                z.extractall(target_dir)
-                                        else:
-                                            with tarfile.open(archive_path, "r:*") as t:
-                                                t.extractall(target_dir)
-                                        input(f"Successfully installed java version {min_java} in {target_dir}")
-                                        print(f"Launching Minecraft version {configs["selected_version"]["id"]} with local java version {min_java} in {target_dir}. YOU CAN CONFIGURE FEATURES IN SETTINGS!!")
-                                        local_java_installed = str(archive_path.parent)
-                                        if not local_java_installed:
-                                            input("Unable to find java")
-                                        else:
-                                            try:
-                                                arguments = json_data["arguments"]
-                                            except Exception:
-                                                arguments = json_data["minecraftArguments"]["game"]
-                                            main_class = json_data["mainClass"]
-                                            classpath_entries = []
-
-                                            for lib in json_data["libraries"]:
-                                                # Skip natives (they go elsewhere)
-                                                if "natives" in lib:
-                                                    continue
-
-                                                artifact = lib.get("downloads", {}).get("artifact")
-                                                if not artifact:
-                                                    continue
-
-                                                lib_path = Path(LIBRARIES_DIR) / artifact["path"]
-                                                classpath_entries.append(str(lib_path))
-
-                                            # Add the main Minecraft jar LAST
-                                            classpath_entries.append(str(configs["selected_version"]["path"]))
-                                            class_path = os.pathsep.join(classpath_entries)
-                                            variables = {
-                                                "auth_player_name": configs["selected_account"]["username"],
-                                                "auth_uuid": configs["selected_account"]["uuid"],
-                                                "auth_access_token": 0, #
-                                                "version_name": json_data["id"],
-                                                "version_type": json_data["type"],
-                                                "game_directory": BASE_DIR,
-                                                "assets_root": ASSETS_DIR,
-                                                "assets_index_name": json_data.get("assetIndex", {}).get("id", ""),
-                                                "classpath": class_path, # we can auto-generate from libraries
-                                                "launcher_name": "Python Minecraft Launcher",
-                                                "launcher_version": "1.0",
-                                                # optional features
-                                                "resolution_width": configs["features"]["resolution_width"],
-                                                "resolution_height": configs["features"]["resolution_height"],
-                                                "quickPlayPath": configs["features"]["quick_play_path"],
-                                                "quickPlaySingleplayer": configs["features"]["quick_play_singleplayer"],
-                                                "quickPlayMultiplayer": configs["features"]["quick_play_multiplayer"],
-                                                "quickPlayRealms": configs["features"]["quick_play_realms"],
-                                                }
-                                            launch_cmd = build_launch_command(
-                                                java_cmd=False,
-                                                json_data=json_data,
-                                                variables=variables,
-                                                features=configs["features"],
-                                            )
-
-                                    except Exception as e:
-                                        input(f"Unable to extract java from {archive_path}: {str(e)}")
-                                except Exception as e:
-                                    input(f"Unable to download java version {min_java}: {str(e)}")
-                    else:
-                        pass#run java
 
             else:
                 input("Unable to launch, either no account selected or no version selected.")
